@@ -82,8 +82,10 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     fun load(pathToModel: String) {
         viewModelScope.launch {
             try {
+                // Set context size to maximum allowed (32K)
+                llamaAndroid.setContextSize(4096)  // Add this line before loading
                 llamaAndroid.load(pathToModel)
-                messages += "Loaded $pathToModel"
+                messages += "Loaded $pathToModel with context size 32K"
             } catch (exc: IllegalStateException) {
                 Log.e(tag, "load() failed", exc)
                 messages += exc.message!!

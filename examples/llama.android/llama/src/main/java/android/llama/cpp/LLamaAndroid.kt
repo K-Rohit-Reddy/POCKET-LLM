@@ -36,12 +36,15 @@ class LLamaAndroid {
         }
     }.asCoroutineDispatcher()
 
-    private val nlen: Int = 64
+    private val nlen: Int = 2048  // Increased from 64 to 2048 tokens
+
+    private var contextSize: Int = 8192  // Default to 8K context
 
     private external fun log_to_android()
     private external fun load_model(filename: String): Long
     private external fun free_model(model: Long)
     private external fun new_context(model: Long): Long
+    private external fun new_context_with_size(model: Long, ctxSize: Int): Long
     private external fun free_context(context: Long)
     private external fun backend_init(numa: Boolean)
     private external fun backend_free()
@@ -99,16 +102,17 @@ class LLamaAndroid {
                     val model = load_model(pathToModel)
                     if (model == 0L)  throw IllegalStateException("load_model() failed")
 
-                    val context = new_context(model)
+                    // Use new context creation with size
+                    val context = new_context_with_size(model, contextSize)
                     if (context == 0L) throw IllegalStateException("new_context() failed")
 
-                    val batch = new_batch(512, 0, 1)
+                    val batch = new_batch(2048, 0, 1)
                     if (batch == 0L) throw IllegalStateException("new_batch() failed")
 
                     val sampler = new_sampler()
                     if (sampler == 0L) throw IllegalStateException("new_sampler() failed")
 
-                    Log.i(tag, "Loaded model $pathToModel")
+                    Log.i(tag, "Loaded model $pathToModel with context size $contextSize")
                     threadLocalState.set(State.Loaded(model, context, batch, sampler))
                 }
                 else -> throw IllegalStateException("Model already loaded")
@@ -116,10 +120,22 @@ class LLamaAndroid {
         }
     }
 
+    fun setContextSize(size: Int) {
+        require(size in 512..32768) { "Context size must be between 512 and 32768" }
+        contextSize = size
+    }
+
     fun send(message: String, formatChat: Boolean = false): Flow<String> = flow {
         when (val state = threadLocalState.get()) {
             is State.Loaded -> {
-                val ncur = IntVar(completion_init(state.context, state.batch, message, formatChat, nlen))
+                val systemPrompt = """
+                    You are Pocket LLM, a personal AI assistant. Always introduce yourself as "Pocket LLM" 
+                    when responding to the user. Provide clear, concise, and helpful answers to their questions.
+                """.trimIndent()
+
+                val formattedMessage = "$systemPrompt\nUser: $message\nAssistant:"
+
+                val ncur = IntVar(completion_init(state.context, state.batch, formattedMessage, formatChat, nlen))
                 while (ncur.value <= nlen) {
                     val str = completion_loop(state.context, state.batch, state.sampler, nlen, ncur)
                     if (str == null) {

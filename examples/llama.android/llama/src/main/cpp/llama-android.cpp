@@ -138,6 +138,39 @@ Java_android_llama_cpp_LLamaAndroid_new_1context(JNIEnv *env, jobject, jlong jmo
 }
 
 extern "C"
+JNIEXPORT jlong JNICALL
+Java_android_llama_cpp_LLamaAndroid_new_1context_1with_1size(JNIEnv *env, jobject, jlong jmodel, jint ctx_size) {
+    auto model = reinterpret_cast<llama_model *>(jmodel);
+
+    if (!model) {
+        LOGe("new_context(): model cannot be null");
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Model cannot be null");
+        return 0;
+    }
+
+    int n_threads = std::max(1, std::min(8, (int) sysconf(_SC_NPROCESSORS_ONLN) - 2));
+    LOGi("Using %d threads", n_threads);
+
+    llama_context_params ctx_params = llama_context_default_params();
+
+    ctx_params.n_ctx           = ctx_size;  // Use the passed context size
+    ctx_params.n_threads       = n_threads;
+    ctx_params.n_threads_batch = n_threads;
+
+    LOGi("Creating context with size %d", ctx_size);
+    llama_context * context = llama_new_context_with_model(model, ctx_params);
+
+    if (!context) {
+        LOGe("llama_new_context_with_model() returned null)");
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
+                      "llama_new_context_with_model() returned null)");
+        return 0;
+    }
+
+    return reinterpret_cast<jlong>(context);
+}
+
+extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_free_1context(JNIEnv *, jobject, jlong context) {
     llama_free(reinterpret_cast<llama_context *>(context));

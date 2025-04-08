@@ -91,7 +91,10 @@ data class Downloadable(val name: String, val source: Uri, val destination: File
                         val request = DownloadManager.Request(item.source).apply {
                             setTitle("Downloading model")
                             setDescription("Downloading model: ${item.name}")
-                            setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
+                            setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
+                            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                            setAllowedOverMetered(true)
+                            setAllowedOverRoaming(true)
                             setDestinationUri(item.destination.toUri())
                         }
 
@@ -110,7 +113,7 @@ data class Downloadable(val name: String, val source: Uri, val destination: File
                     is Downloading -> Text(text = "Downloading ${(progress * 100).toInt()}%")
                     is Downloaded -> Text("Load ${item.name}")
                     is Ready -> Text("Download ${item.name}")
-                    is Error -> Text("Download ${item.name}")
+                    is Error -> Text("Error - Retry ${item.name}")
                 }
             }
         }
