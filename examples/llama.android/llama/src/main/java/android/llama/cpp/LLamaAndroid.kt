@@ -12,6 +12,9 @@ import kotlin.concurrent.thread
 
 class LLamaAndroid {
     private val tag: String? = this::class.simpleName
+    private var userName: String = "User"
+    private var assistantName: String = "Assistant"
+    private var modelPath: String? = null
 
     private val threadLocalState: ThreadLocal<State> = ThreadLocal.withInitial { State.Idle }
 
@@ -19,10 +22,8 @@ class LLamaAndroid {
         thread(start = false, name = "Llm-RunLoop") {
             Log.d(tag, "Dedicated thread for native code: ${Thread.currentThread().name}")
 
-            // No-op if called more than once.
             System.loadLibrary("llama-android")
 
-            // Set llama log handler to Android
             log_to_android()
             backend_init(false)
 
@@ -36,9 +37,8 @@ class LLamaAndroid {
         }
     }.asCoroutineDispatcher()
 
-    private val nlen: Int = 2048  // Increased from 64 to 2048 tokens
-
-    private var contextSize: Int = 8192  // Default to 8K context
+    private val nlen: Int = 4096 // 4K response size
+    private var contextSize: Int = 8192
 
     private external fun log_to_android()
     private external fun load_model(filename: String): Long
@@ -89,7 +89,6 @@ class LLamaAndroid {
                     Log.d(tag, "bench(): $state")
                     bench_model(state.context, state.model, state.batch, pp, tg, pl, nr)
                 }
-
                 else -> throw IllegalStateException("No model loaded")
             }
         }
@@ -100,9 +99,8 @@ class LLamaAndroid {
             when (threadLocalState.get()) {
                 is State.Idle -> {
                     val model = load_model(pathToModel)
-                    if (model == 0L)  throw IllegalStateException("load_model() failed")
+                    if (model == 0L) throw IllegalStateException("load_model() failed")
 
-                    // Use new context creation with size
                     val context = new_context_with_size(model, contextSize)
                     if (context == 0L) throw IllegalStateException("new_context() failed")
 
@@ -129,11 +127,16 @@ class LLamaAndroid {
         when (val state = threadLocalState.get()) {
             is State.Loaded -> {
                 val systemPrompt = """
-                    You are Pocket LLM, a personal AI assistant. Always introduce yourself as "Pocket LLM" 
-                    when responding to the user. Provide clear, concise, and helpful answers to their questions.
+                    You are $assistantName, a helpful AI assistant. Follow these guidelines:
+                    - Be concise yet thorough
+                    - Use clear, simple language
+                    - Format responses neatly with proper spacing
+                    - If unsure, say "I don't know" rather than guessing
+                    - For coding questions, provide complete examples
+                    - Always maintain a helpful, professional tone
                 """.trimIndent()
 
-                val formattedMessage = "$systemPrompt\nUser: $message\nAssistant:"
+                val formattedMessage = "$systemPrompt\n$userName: $message\n$assistantName:"
 
                 val ncur = IntVar(completion_init(state.context, state.batch, formattedMessage, formatChat, nlen))
                 while (ncur.value <= nlen) {
@@ -149,11 +152,6 @@ class LLamaAndroid {
         }
     }.flowOn(runLoop)
 
-    /**
-     * Unloads the model and frees resources.
-     *
-     * This is a no-op if there's no model loaded.
-     */
     suspend fun unload() {
         withContext(runLoop) {
             when (val state = threadLocalState.get()) {
@@ -161,13 +159,20 @@ class LLamaAndroid {
                     free_context(state.context)
                     free_model(state.model)
                     free_batch(state.batch)
-                    free_sampler(state.sampler);
-
+                    free_sampler(state.sampler)
                     threadLocalState.set(State.Idle)
                 }
                 else -> {}
             }
         }
+    }
+
+    fun initialize(userName: String, assistantName: String) {
+        if (threadLocalState.get() !is State.Idle) {
+            throw IllegalStateException("Cannot initialize after loading model")
+        }
+        this.userName = userName
+        this.assistantName = assistantName
     }
 
     companion object {
@@ -188,7 +193,6 @@ class LLamaAndroid {
             data class Loaded(val model: Long, val context: Long, val batch: Long, val sampler: Long): State
         }
 
-        // Enforce only one instance of Llm.
         private val _instance: LLamaAndroid = LLamaAndroid()
 
         fun instance(): LLamaAndroid = _instance

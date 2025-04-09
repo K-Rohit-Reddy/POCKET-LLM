@@ -9,22 +9,20 @@ android {
 
     defaultConfig {
         minSdk = 33
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
         ndk {
-            // Add NDK properties if wanted, e.g.
-            // abiFilters += listOf("arm64-v8a")
+            // Optimize for specific architectures if needed
+            abiFilters += listOf("arm64-v8a") // Example; adjust as necessary
         }
         externalNativeBuild {
             cmake {
-                arguments += "-DLLAMA_BUILD_COMMON=ON"
-                arguments += "-DGGML_LLAMAFILE=OFF"
-                arguments += "-DCMAKE_BUILD_TYPE=Release"
-                cppFlags += listOf()
-                arguments += listOf()
-
-                cppFlags("")
+                arguments += listOf(
+                    "-DLLAMA_BUILD_COMMON=ON",
+                    "-DGGML_LLAMAFILE=OFF",
+                    "-DCMAKE_BUILD_TYPE=Release"
+                )
+                // Removed empty cppFlags to avoid confusion
             }
         }
     }
@@ -51,7 +49,6 @@ android {
     kotlinOptions {
         jvmTarget = "1.8"
     }
-
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -60,7 +57,6 @@ android {
 }
 
 dependencies {
-
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")

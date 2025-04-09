@@ -1,107 +1,220 @@
 package com.example.llama
 
-import android.llama.cpp.LLamaAndroid
+import android.content.SharedPreferences
 import android.util.Log
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.flow.catch
+import com.example.llama.model.ChatHistory
+import android.llama.cpp.LLamaAndroid
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException // Added import
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 
-class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance()): ViewModel() {
-    companion object {
-        @JvmStatic
-        private val NanosPerSecond = 1_000_000_000.0
+class MainViewModel : ViewModel() {
+    val userName = mutableStateOf("User")
+    val assistantName = mutableStateOf("Assistant")
+    val message = mutableStateOf("")
+    val messages = mutableStateListOf<String>()
+    val chatHistories = mutableStateListOf<ChatHistory>()
+    val modelPath = mutableStateOf("")
+    val importError = mutableStateOf("")
+    val isLoadingModel = mutableStateOf(false)
+    private lateinit var historyFile: File
+    private val llama = LLamaAndroid.instance().apply {
+        setContextSize(8192) // 8K context size
+    }
+    var isGenerating = mutableStateOf(false)
+    private var sendJob: Job? = null
+
+    fun loadPrefs(prefs: SharedPreferences) {
+        userName.value = prefs.getString("userName", "User") ?: "User"
+        assistantName.value = prefs.getString("assistantName", "Assistant") ?: "Assistant"
+        modelPath.value = prefs.getString("modelPath", "") ?: ""
+        historyFile = File(prefs.getString("historyDir", ""), "chat_history.json")
+        loadHistory()
+        llama.initialize(userName.value, assistantName.value)
+        if (modelPath.value.isNotEmpty()) {
+            load(modelPath.value)
+        }
     }
 
-    private val tag: String? = this::class.simpleName
+    fun savePrefs(prefs: SharedPreferences) {
+        with(prefs.edit()) {
+            putString("userName", userName.value)
+            putString("assistantName", assistantName.value)
+            putString("modelPath", modelPath.value)
+            putBoolean("isFirstLaunch", false)
+            putString("historyDir", historyFile.parent)
+            apply()
+        }
+        llama.initialize(userName.value, assistantName.value)
+    }
 
-    var messages by mutableStateOf(listOf("Initializing..."))
-        private set
+    private fun loadHistory() {
+        if (historyFile.exists()) {
+            val json = historyFile.readText()
+            chatHistories.addAll(Json.decodeFromString<List<ChatHistory>>(json))
+        }
+    }
 
-    var message by mutableStateOf("")
-        private set
+    fun saveCurrentChat() {
+        if (messages.isNotEmpty()) {
+            val chat = ChatHistory(
+                id = UUID.randomUUID().toString(),
+                title = "Chat ${chatHistories.size + 1} - ${SimpleDateFormat("MMM dd").format(Date())}",
+                date = Date(),
+                messages = messages.toList()
+            )
+            chatHistories.add(chat)
+            try {
+                historyFile.writeText(Json.encodeToString(chatHistories.toList()))
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Failed to save chat history: ${e.message}")
+            }
+            messages.clear()
+        }
+    }
 
-    override fun onCleared() {
-        super.onCleared()
+    fun loadChat(chatId: String) {
+        chatHistories.find { it.id == chatId }?.let {
+            messages.clear()
+            messages.addAll(it.messages)
+            Log.d("MainViewModel", "Loaded chat with ID: $chatId, Messages: ${it.messages}")
+        }
+    }
 
+    fun deleteChat(chatId: String) {
+        chatHistories.removeIf { it.id == chatId }
+        try {
+            historyFile.writeText(Json.encodeToString(chatHistories.toList()))
+        } catch (e: Exception) {
+            Log.e("MainViewModel", "Failed to delete chat history: ${e.message}")
+        }
+    }
+
+    fun setModelPath(path: String) {
+        if (!path.endsWith(".gguf")) {
+            importError.value = "Please select a .gguf file"
+            return
+        }
+        isLoadingModel.value = true
+        importError.value = ""
         viewModelScope.launch {
             try {
-                llamaAndroid.unload()
-            } catch (exc: IllegalStateException) {
-                messages += exc.message!!
+                modelPath.value = path
+                llama.load(path)
+                Log.d("MainViewModel", "Successfully loaded model from: $path")
+            } catch (e: Exception) {
+                importError.value = "Failed to load model: ${e.message}"
+                Log.e("MainViewModel", "Model load error: ${e.stackTraceToString()}")
+            } finally {
+                isLoadingModel.value = false
             }
         }
     }
 
-    fun send() {
-        val text = message
-        message = ""
-
-        // Add to messages console.
-        messages += text
-        messages += ""
-
+    fun startNewChat() {
+        saveCurrentChat()
+        messages.clear()
+        sendJob?.cancel()
+        isGenerating.value = false
+        // Clear any cached context
         viewModelScope.launch {
-            llamaAndroid.send(text)
-                .catch {
-                    Log.e(tag, "send() failed", it)
-                    messages += it.message!!
-                }
-                .collect { messages = messages.dropLast(1) + (messages.last() + it) }
+            llama.unload()
+            if (modelPath.value.isNotEmpty()) {
+                llama.load(modelPath.value)
+            }
         }
+        Log.d("MainViewModel", "Started new chat with full state reset")
     }
 
-    fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1) {
-        viewModelScope.launch {
+    fun send(prompt: String = message.value.trim()) {
+        if (prompt.isBlank()) return
+        isGenerating.value = true
+        sendJob?.cancel()
+        sendJob = viewModelScope.launch {
             try {
-                val start = System.nanoTime()
-                val warmupResult = llamaAndroid.bench(pp, tg, pl, nr)
-                val end = System.nanoTime()
-
-                messages += warmupResult
-
-                val warmup = (end - start).toDouble() / NanosPerSecond
-                messages += "Warm up time: $warmup seconds, please wait..."
-
-                if (warmup > 5.0) {
-                    messages += "Warm up took too long, aborting benchmark"
+                Log.d("MainViewModel", "Sending prompt: $prompt")
+                if (modelPath.value.isEmpty()) {
+                    messages.add("${assistantName.value}: No model loaded. Please load a model from Settings.")
+                    isGenerating.value = false
                     return@launch
                 }
 
-                messages += llamaAndroid.bench(512, 128, 1, 3)
-            } catch (exc: IllegalStateException) {
-                Log.e(tag, "bench() failed", exc)
-                messages += exc.message!!
+                val responseBuilder = StringBuilder()
+                // Add initial assistant message marker
+                messages.add("${assistantName.value}: ")
+                
+                llama.send(prompt).collect { partialResponse ->
+                    responseBuilder.append(partialResponse)
+                    val currentResponse = responseBuilder.toString().trim()
+                    
+                    // Only update if we have meaningful content
+                    if (currentResponse.isNotEmpty() && 
+                        !currentResponse.endsWith("...") && // Skip interim "..."
+                        currentResponse != messages.lastOrNull()?.removePrefix("${assistantName.value}: ")?.trim()) {
+                        
+                        // Format response with proper spacing and line breaks
+                        val formattedResponse = currentResponse
+                            .replace("\n\n", "\n") // Normalize line breaks
+                            .replace(Regex(" {2,}"), " ") // Normalize spaces
+                        
+                        if (messages.lastOrNull()?.startsWith("${assistantName.value}:") == true) {
+                            messages[messages.lastIndex] = "${assistantName.value}: $formattedResponse"
+                        } else {
+                            messages.add("${assistantName.value}: $formattedResponse")
+                        }
+                    }
+                }
+
+                val fullResponse = responseBuilder.toString().trim()
+                if (fullResponse.isNotEmpty() && messages.lastOrNull() != "${assistantName.value}: $fullResponse") {
+                    messages[messages.lastIndex] = "${assistantName.value}: $fullResponse"
+                }
+                Log.d("MainViewModel", "Response generation completed for prompt: $prompt")
+            } catch (e: Exception) {
+                if (e !is CancellationException) { // Avoid adding cancellation errors
+                    messages.add("${assistantName.value}: Error: ${e.message}")
+                    Log.e("MainViewModel", "Send error: ${e.stackTraceToString()}")
+                }
+            } finally {
+                isGenerating.value = false
+                sendJob = null
             }
         }
     }
 
-    fun load(pathToModel: String) {
-        viewModelScope.launch {
-            try {
-                // Set context size to maximum allowed (32K)
-                llamaAndroid.setContextSize(4096)  // Add this line before loading
-                llamaAndroid.load(pathToModel)
-                messages += "Loaded $pathToModel with context size 32K"
-            } catch (exc: IllegalStateException) {
-                Log.e(tag, "load() failed", exc)
-                messages += exc.message!!
-            }
+    fun pause() {
+        sendJob?.cancel()
+        isGenerating.value = false
+        // Remove any incomplete assistant message
+        messages.removeAll { 
+            it.startsWith("${assistantName.value}:") && 
+            (it.length < 10 || it.endsWith("..."))
         }
-    }
-
-    fun updateMessage(newMessage: String) {
-        message = newMessage
-    }
-
-    fun clear() {
-        messages = listOf()
+        Log.d("MainViewModel", "Paused and cleaned partial responses")
     }
 
     fun log(message: String) {
-        messages += message
+        Log.d("MainViewModel", message)
+    }
+
+    fun load(path: String) {
+        setModelPath(path)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        viewModelScope.launch {
+            llama.unload()
+        }
     }
 }
