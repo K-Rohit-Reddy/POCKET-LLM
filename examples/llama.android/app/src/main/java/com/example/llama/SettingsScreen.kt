@@ -2,6 +2,7 @@ package com.example.llama
 
 import android.app.DownloadManager
 import android.content.SharedPreferences
+import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -31,17 +32,31 @@ fun SettingsScreen(
     modelOptions: List<Downloadable>,
     prefs: SharedPreferences
 ) {
+    val context = LocalContext.current
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
         onResult = { uri ->
             uri?.let {
-                if (it.toString().endsWith(".gguf")) {
-                    viewModel.setModelPath(it.toString())
-                    viewModel.savePrefs(prefs)
-                    navController.popBackStack()
-                } else {
-                    viewModel.importError.value = "Please select a .gguf file"
+                try {
+                    val fileName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val displayNameIndex = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.DISPLAY_NAME)
+                            if (displayNameIndex != -1) cursor.getString(displayNameIndex) else null
+                        } else null
+                    } ?: uri.toString().substringAfterLast('/').takeIf { it.isNotEmpty() }
+
+                    if (fileName != null && fileName.endsWith(".gguf", ignoreCase = true)) {
+                        viewModel.setModelPath(uri.toString())
+                        viewModel.savePrefs(prefs)
+                        navController.popBackStack()
+                    } else {
+                        viewModel.importError.value = "Please select a .gguf file"
+                    }
+                } catch (e: Exception) {
+                    viewModel.importError.value = "Error checking file: ${e.message}"
                 }
+            } ?: run {
+                viewModel.importError.value = "No file selected"
             }
         }
     )
@@ -71,11 +86,11 @@ fun SettingsScreen(
                 value = viewModel.userName.value,
                 onValueChange = { newValue -> viewModel.userName.value = newValue },
                 label = { Text("Your Name") },
-                leadingIcon = { 
+                leadingIcon = {
                     Icon(
                         imageVector = Icons.Filled.Person,
                         contentDescription = "User"
-                    ) 
+                    )
                 },
                 trailingIcon = {
                     if (isEditingName) {
@@ -112,11 +127,11 @@ fun SettingsScreen(
                 value = viewModel.assistantName.value,
                 onValueChange = { newValue -> viewModel.assistantName.value = newValue },
                 label = { Text("Assistant Name") },
-                leadingIcon = { 
+                leadingIcon = {
                     Icon(
                         imageVector = Icons.Filled.Person,
                         contentDescription = "Assistant"
-                    ) 
+                    )
                 },
                 trailingIcon = {
                     if (isEditingAssistant) {
@@ -149,7 +164,7 @@ fun SettingsScreen(
             )
 
             ModelImportCard(
-                onImportClick = { filePickerLauncher.launch("*/*") },
+                onImportClick = { filePickerLauncher.launch("/") },
                 modifier = Modifier.fillMaxWidth()
             )
 

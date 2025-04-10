@@ -84,11 +84,11 @@ fun SetupScreen(
             value = viewModel.userName.value,
             onValueChange = { newValue -> viewModel.userName.value = newValue },
             label = { Text("Your Name") },
-            leadingIcon = { 
+            leadingIcon = {
                 Icon(
                     imageVector = Icons.Filled.Person,
                     contentDescription = "User"
-                ) 
+                )
             },
             trailingIcon = {
                 if (isEditingName) {
@@ -100,7 +100,8 @@ fun SetupScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Check,
-                            contentDescription = "Save"
+                            contentDescription = "Save",
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 } else {
@@ -109,7 +110,8 @@ fun SetupScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Edit,
-                            contentDescription = "Edit"
+                            contentDescription = "Edit",
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
@@ -125,11 +127,11 @@ fun SetupScreen(
             value = viewModel.assistantName.value,
             onValueChange = { newValue -> viewModel.assistantName.value = newValue },
             label = { Text("Assistant Name") },
-            leadingIcon = { 
+            leadingIcon = {
                 Icon(
                     imageVector = Icons.Filled.Person,
                     contentDescription = "Assistant"
-                ) 
+                )
             },
             trailingIcon = {
                 if (isEditingAssistant) {
@@ -141,7 +143,8 @@ fun SetupScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Check,
-                            contentDescription = "Save"
+                            contentDescription = "Save",
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 } else {
@@ -150,7 +153,8 @@ fun SetupScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Edit,
-                            contentDescription = "Edit"
+                            contentDescription = "Edit",
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
