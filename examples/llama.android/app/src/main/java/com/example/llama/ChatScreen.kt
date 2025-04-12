@@ -1,5 +1,7 @@
 package com.example.llama
 
+import android.content.ClipboardManager
+import android.util.Log
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -8,35 +10,31 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
-import android.content.ClipboardManager
 import com.example.llama.component.ChatHistoryDrawer
 import com.example.llama.component.MessageBubble
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
-import android.util.Log
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
-import androidx.compose.ui.platform.LocalFocusManager
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     navController: NavHostController,
     viewModel: MainViewModel,
-    clipboardManager: ClipboardManager
+    clipboardManager: ClipboardManager,
+    requestPermissions: (Array<String>) -> Unit = {} // Add callback
 ) {
     val scrollState = rememberLazyListState()
     val isGenerating by viewModel.isGenerating
@@ -44,8 +42,8 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val currentDate = SimpleDateFormat("MMM dd, yyyy").format(Date())
+    var isLoadingChat by remember { mutableStateOf(false) }
 
-    // Animation for loading dots
     val infiniteTransition = rememberInfiniteTransition()
     val dotOffset by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -56,46 +54,37 @@ fun ChatScreen(
         )
     )
 
-    // Initial welcome message with names
     LaunchedEffect(Unit) {
-        if (viewModel.messages.isEmpty()) {
-            val welcomeMessage = "${viewModel.assistantName.value}: Hello, ${viewModel.userName.value}! I'm here to assist you. How can I help you today?"
-            viewModel.messages.add(welcomeMessage)
-        }
+        viewModel.messages.clear()
+        val welcomeMessage = "${viewModel.assistantName.value}: Hello, ${viewModel.userName.value}! I'm here to assist you. How can I help you today?"
+        viewModel.messages.add(welcomeMessage)
+        viewModel.currentChatId = null
+        Log.d("ChatScreen", "Started fresh chat with welcome message: $welcomeMessage")
     }
 
-    // Scroll to the latest message
-    // Track when new content is being generated
     LaunchedEffect(viewModel.isGenerating.value, viewModel.messages.size) {
         if (viewModel.messages.isNotEmpty()) {
             scope.launch {
                 try {
-                    // Immediate jump to bottom when new message starts
                     scrollState.scrollToItem(viewModel.messages.size - 1)
-                    
-                    // If generating, continuously check and scroll as content grows
+                    Log.d("ChatScreen", "Scrolled to latest message, size: ${viewModel.messages.size}")
                     if (viewModel.isGenerating.value) {
                         while (viewModel.isGenerating.value) {
-                            delay(100) // Check every 100ms
-                            
+                            delay(50)
                             val layoutInfo = scrollState.layoutInfo
                             val lastItem = layoutInfo.visibleItemsInfo.lastOrNull()
-                            
                             if (lastItem != null && lastItem.index == viewModel.messages.size - 1) {
                                 val viewportHeight = layoutInfo.viewportEndOffset
                                 val itemBottom = lastItem.offset + lastItem.size
-                                
                                 if (itemBottom > viewportHeight) {
-                                    scrollState.animateScrollToItem(
-                                        viewModel.messages.size - 1,
-                                        scrollOffset = 0
-                                    )
+                                    scrollState.animateScrollToItem(viewModel.messages.size - 1, 0)
+                                    Log.d("ChatScreen", "Auto-scrolling during generation")
                                 }
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Log.d("ChatScreen", "Scroll error: ${e.message}")
+                    Log.e("ChatScreen", "Scroll error: ${e.message}")
                 }
             }
         }
@@ -107,14 +96,40 @@ fun ChatScreen(
             ChatHistoryDrawer(
                 histories = viewModel.chatHistories,
                 onHistorySelected = { chatId ->
-                    viewModel.loadChat(chatId)
-                    scope.launch { drawerState.close() }
+                    scope.launch {
+                        Log.d("ChatScreen", "Loading chat: $chatId")
+                        isLoadingChat = true
+                        viewModel.loadChat(chatId)
+                        drawerState.close()
+                        delay(200)
+                        scrollState.scrollToItem(viewModel.messages.size - 1)
+                        isLoadingChat = false
+                        Log.d("ChatScreen", "Chat loaded, drawer closed")
+                    }
                 },
                 onNewChat = {
-                    viewModel.startNewChat()
-                    scope.launch { drawerState.close() }
+                    scope.launch {
+                        Log.d("ChatScreen", "New chat requested")
+                        val welcomeMessage = "${viewModel.assistantName.value}: Hello, ${viewModel.userName.value}! I'm here to assist you. How can I help you today?"
+                        val isEffectivelyEmpty = viewModel.messages.isEmpty() ||
+                            (viewModel.messages.size == 1 && viewModel.messages.first() == welcomeMessage)
+                        if (!isEffectivelyEmpty) {
+                            viewModel.startNewChat()
+                            Log.d("ChatScreen", "New chat started, drawer closed")
+                        } else {
+                            Log.d("ChatScreen", "Current chat is effectively empty, no new chat needed")
+                        }
+                        drawerState.close()
+                    }
                 },
-                onDeleteChat = { viewModel.deleteChat(it) },
+                onDeleteChat = { chatId ->
+                    Log.d("ChatScreen", "Deleting chat: $chatId")
+                    viewModel.deleteChat(chatId)
+                },
+                getChatMessages = { chatId ->
+                    viewModel.chatHistories.find { it.id == chatId }?.messages ?: emptyList()
+                },
+                requestPermissions = requestPermissions, // Pass callback
                 modifier = Modifier.fillMaxHeight()
             )
         }
@@ -123,8 +138,11 @@ fun ChatScreen(
             topBar = {
                 CenterAlignedTopAppBar(
                     title = {
+                        val currentChatTitle = viewModel.chatHistories.find { chat ->
+                            chat.id == viewModel.currentChatId
+                        }?.title ?: "Chat - $currentDate"
                         Text(
-                            "Chat - $currentDate",
+                            currentChatTitle,
                             style = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(4.dp)
                         )
@@ -133,7 +151,12 @@ fun ChatScreen(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant
                     ),
                     actions = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        IconButton(onClick = {
+                            scope.launch {
+                                Log.d("ChatScreen", "Opening drawer")
+                                drawerState.open()
+                            }
+                        }) {
                             Icon(Icons.Filled.History, "History")
                         }
                         IconButton(onClick = { navController.navigate("settings") }) {
@@ -149,31 +172,58 @@ fun ChatScreen(
                     .padding(padding)
                     .background(MaterialTheme.colorScheme.background)
             ) {
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    state = scrollState,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(viewModel.messages) { message ->
-                        val isUserMessage = message.startsWith("${viewModel.userName.value}:")
-                        val displayText = if (isUserMessage) message.removePrefix("${viewModel.userName.value}:") else message.removePrefix("${viewModel.assistantName.value}:")
-                        val isLoading = !isUserMessage && message.endsWith(": ") && isGenerating
-                        Box(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = if (isUserMessage) Alignment.CenterEnd else Alignment.CenterStart
-                        ) {
-                            MessageBubble(
-                                text = if (isLoading) "..." else displayText,
-                                isUser = isUserMessage,
-                                modifier = Modifier
-                                    .widthIn(max = 300.dp)
-                                    .padding(horizontal = 8.dp),
-                                isLoading = isLoading,
-                                dotOffset = if (isLoading) dotOffset else 0f
-                            )
+                if (isLoadingChat) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else if (viewModel.messages.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "No messages yet. Start chatting!",
+                            style = TextStyle(fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        state = scrollState,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(viewModel.messages) { message ->
+                            val isUserMessage = message.startsWith("${viewModel.userName.value}:")
+                            val displayText = if (isUserMessage) {
+                                message.removePrefix("${viewModel.userName.value}:")
+                            } else {
+                                message.removePrefix("${viewModel.assistantName.value}:")
+                            }
+                            val isLoading = !isUserMessage && message.endsWith(": ") && isGenerating
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = if (isUserMessage) Alignment.CenterEnd else Alignment.CenterStart
+                            ) {
+                                MessageBubble(
+                                    text = if (isLoading) "..." else displayText,
+                                    isUser = isUserMessage,
+                                    modifier = Modifier
+                                        .widthIn(max = 300.dp)
+                                        .padding(horizontal = 8.dp),
+                                    isLoading = isLoading,
+                                    dotOffset = if (isLoading) dotOffset else 0f
+                                )
+                            }
                         }
                     }
                 }
@@ -194,7 +244,7 @@ fun ChatScreen(
                             .padding(end = 8.dp),
                         singleLine = false,
                         maxLines = 3,
-                        enabled = !isGenerating
+                        enabled = !isGenerating && !isLoadingChat
                     )
                     if (isGenerating) {
                         IconButton(
@@ -214,14 +264,13 @@ fun ChatScreen(
                         IconButton(
                             onClick = {
                                 if (viewModel.message.value.isNotBlank()) {
-                                    viewModel.isGenerating.value = true
-                                    val userMessage = "${viewModel.userName.value}: ${viewModel.message.value}"
-                                    viewModel.messages.add(userMessage)
+                                    Log.d("ChatScreen", "Sending message: ${viewModel.message.value}")
                                     viewModel.send(viewModel.message.value)
                                     viewModel.message.value = ""
+                                    focusManager.clearFocus()
                                 }
                             },
-                            enabled = !isGenerating && viewModel.message.value.isNotBlank(),
+                            enabled = !isGenerating && viewModel.message.value.isNotBlank() && !isLoadingChat,
                             modifier = Modifier
                                 .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(8.dp))
                                 .padding(4.dp)
