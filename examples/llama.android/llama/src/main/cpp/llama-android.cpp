@@ -116,7 +116,7 @@ Java_android_llama_cpp_LLamaAndroid_new_1context(JNIEnv *env, jobject, jlong jmo
         return 0;
     }
 
-    const int n_threads = 6;
+    const int n_threads = 4;
     LOGi("Using fixed %d threads", n_threads);
 
     llama_context_params ctx_params = llama_context_default_params();
