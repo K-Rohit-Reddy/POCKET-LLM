@@ -14,6 +14,9 @@ import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -263,43 +266,45 @@ fun generateChatPdf(context: android.content.Context, chatId: String, messages: 
     var page = document.startPage(pageInfo)
     var canvas = page.canvas
     val paint = Paint()
+    val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 8f // Reduced font size
+        typeface = Typeface.SERIF
+        color = Color.BLACK
+    }
+    val timestampHeight = 20f
+    val bubblePadding = 15f
+    val bubbleRadius = 15f
+    val maxBubbleWidth = 350f
+    val lineHeight = textPaint.getFontSpacing() // Use actual font spacing
 
     // Border settings
-    val borderMargin = 30f
+    val borderMargin = 40f
     val contentWidth = pageInfo.pageWidth - 2 * borderMargin
     val contentHeight = pageInfo.pageHeight - 2 * borderMargin
     val borderRect = RectF(borderMargin, borderMargin, borderMargin + contentWidth, borderMargin + contentHeight)
 
     // Header settings
     val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
-    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault()) // Explicit 24-hour format
-    val currentDate = dateFormat.format(Date())
-    var yPosition = borderMargin + 170f // Below header
+    val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+    var yPosition = borderMargin + 170f // Below header for page 1
 
     fun drawPageHeader(canvas: Canvas) {
-        // Draw date in a curved rectangle (top-left) only on the first page
         if (pageNumber == 1) {
-            paint.color = Color.parseColor("#EADDFF") // Same light purple as page number
+            paint.color = Color.parseColor("#EADDFF")
             paint.style = Paint.Style.FILL
-            val dateText = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date())
-            paint.textSize = 14f
+            val dateText = dateFormat.format(Date())
+            paint.textSize = 10f
             paint.typeface = Typeface.SERIF
             val textWidth = paint.measureText(dateText)
-            val rectWidth = textWidth + 20f // Extra padding
+            val rectWidth = textWidth + 20f
             val rectHeight = 30f
-            val dateRect = RectF(
-                borderMargin + 10f,
-                borderMargin,
-                borderMargin + 10f + rectWidth,
-                borderMargin + rectHeight
-            )
-            canvas.drawRoundRect(dateRect, 10f, 10f, paint) // Curved rectangle with 10f corner radius
+            val dateRect = RectF(borderMargin + 10f, borderMargin, borderMargin + 10f + rectWidth, borderMargin + rectHeight)
+            canvas.drawRoundRect(dateRect, 10f, 10f, paint)
 
             paint.color = Color.parseColor("#6750A4")
             canvas.drawText(dateText, dateRect.left + 10f, dateRect.top + 20f, paint)
         }
 
-        // Draw header icon (top-right) on every page
         try {
             val svg = SVG.getFromResource(context.resources, R.raw.header_icon)
             val bitmap = Bitmap.createBitmap(250, 250, Bitmap.Config.ARGB_8888)
@@ -318,10 +323,10 @@ fun generateChatPdf(context: android.content.Context, chatId: String, messages: 
     }
 
     fun drawPageNumber(canvas: Canvas, pageNum: Int) {
-        paint.color = Color.parseColor("#EADDFF") // Light purple circle
+        paint.color = Color.parseColor("#EADDFF")
         paint.style = Paint.Style.FILL
-        val boxWidth = 40f
-        val boxHeight = 40f
+        val boxWidth = 16f
+        val boxHeight = 16f
         val boxRect = RectF(
             (contentWidth / 2) - (boxWidth / 2) + borderMargin,
             pageInfo.pageHeight - boxHeight - 20f,
@@ -331,132 +336,117 @@ fun generateChatPdf(context: android.content.Context, chatId: String, messages: 
         canvas.drawOval(boxRect, paint)
 
         paint.color = Color.parseColor("#6750A4")
-        paint.textSize = 14f
-        paint.typeface = Typeface.SERIF // Readable font for page number
+        paint.textSize = 6f
+        paint.typeface = Typeface.SERIF
+        paint.textAlign = Paint.Align.CENTER
         val text = "$pageNum"
-        val textWidth = paint.measureText(text)
-        canvas.drawText(text, boxRect.left + (boxWidth - textWidth) / 2, boxRect.top + (boxHeight / 2) + 5f, paint)
+        val fontMetrics = paint.fontMetrics
+        val textOffset = (fontMetrics.descent + fontMetrics.ascent) / 2
+        canvas.drawText(
+            text,
+            boxRect.left + (boxWidth / 2),
+            boxRect.top + (boxHeight / 2) - textOffset,
+            paint
+        )
+    }
+
+    fun wrapText(text: String, paint: Paint, maxWidth: Float): List<String> {
+        val lines = mutableListOf<String>()
+        val paragraphs = text.split("\n")
+        paragraphs.forEach { paragraph ->
+            val words = paragraph.split(" ")
+            var currentLine = StringBuilder()
+            words.forEach { word ->
+                val testLine = if (currentLine.isEmpty()) word else "$currentLine $word"
+                if (paint.measureText(testLine) <= maxWidth) {
+                    currentLine = StringBuilder(testLine)
+                } else {
+                    if (currentLine.isNotEmpty()) lines.add(currentLine.toString())
+                    currentLine = StringBuilder(word)
+                }
+            }
+            if (currentLine.isNotEmpty()) lines.add(currentLine.toString())
+        }
+        return lines
     }
 
     drawPageHeader(canvas)
 
-    // Bubble settings
-    val bubblePadding = 15f // Increased padding to 15f for more space inside the bubble
-    val bubbleRadius = 15f
-    val maxBubbleWidth = 400f // Fixed maximum bubble width to 300f to match ChatScreen
-
-    // Function to wrap text within bubble width
-    fun wrapText(text: String, paint: Paint, maxWidth: Float): List<String> {
-        val words = text.split(" ")
-        val lines = mutableListOf<String>()
-        var currentLine = StringBuilder()
-        words.forEach { word ->
-            val testLine = if (currentLine.isEmpty()) word else "$currentLine $word"
-            if (paint.measureText(testLine) <= maxWidth - 2 * bubblePadding) {
-                currentLine = StringBuilder(testLine)
-            } else {
-                lines.add(currentLine.toString())
-                currentLine = StringBuilder(word)
-            }
-        }
-        if (currentLine.isNotEmpty()) lines.add(currentLine.toString())
-        return lines
-    }
-
-// Draw messages sequentially with only 24-hour time
-    paint.textSize = 10f // Set initial font size
-    paint.typeface = Typeface.SERIF // Decent readable font for text
-    paint.style = Paint.Style.FILL
     messages.forEachIndexed { index, message ->
-        val timestamp = timeFormat.format(Date(System.currentTimeMillis() + index * 60000)) // Only 24-hour time
-        // Dynamically detect sender and content
-        val parts = message.split(":", limit = 2) // Split on first colon only
+        val timestamp = timeFormat.format(Date(System.currentTimeMillis() + index * 60000))
+        val parts = message.split(":", limit = 2)
         val sender = if (parts.size > 1) parts[0].trim() else "Unknown"
         val cleanMessage = if (parts.size > 1) parts[1].trim() else message
-        val isUserMessage = sender.toLowerCase() != "assistant" && sender.toLowerCase() != "lara" // Assume non-AI names are users
+        val isUserMessage = sender.toLowerCase() != "assistant" && sender.toLowerCase() != "lara"
 
-        val lines = wrapText(cleanMessage, paint, maxBubbleWidth - 2 * bubblePadding) // Adjusted for new padding
-        val textHeight = lines.size * 20f
-        val bubbleHeight = textHeight + 2 * bubblePadding + 20f // Extra for timestamp
-        val bubbleWidth = (listOf(timestamp, sender) + lines).maxOf { paint.measureText(it) } + 2 * bubblePadding // Adjusted for new padding
+        var lines = wrapText(cleanMessage, paint, maxBubbleWidth - 2 * bubblePadding)
+        var lineIndex = 0
+        while (lineIndex < lines.size) {
+            val remainingHeight = (pageInfo.pageHeight - borderMargin) - yPosition
+            val maxLines = ((remainingHeight - 2 * bubblePadding - (if (lineIndex == 0) timestampHeight else 0f)) / lineHeight).toInt().coerceAtLeast(1)
+            val linesForBubble = lines.subList(lineIndex, minOf(lineIndex + maxLines, lines.size))
+            val text = linesForBubble.joinToString("\n")
+            val layout = StaticLayout(text, textPaint, (maxBubbleWidth - 2 * bubblePadding).toInt(), Layout.Alignment.ALIGN_NORMAL, 1.2f, 3.0f, false)
+            val contentHeightBubble = layout.height.toFloat()
+            val extraHeight = if (lineIndex == 0) timestampHeight else 0f
+            val bubbleHeight = contentHeightBubble + 2 * bubblePadding + extraHeight
 
-        if (yPosition + bubbleHeight + 30f > borderMargin + contentHeight - 50f) {
-            drawPageNumber(canvas, pageNumber)
-            document.finishPage(page)
-            pageNumber++
-            page = document.startPage(PdfDocument.PageInfo.Builder(595, 842, pageNumber).create())
-            canvas = page.canvas
-            paint.textSize = 10f // Reapply font size for new page
-            drawPageHeader(canvas)
-            yPosition = borderMargin + 170f
-        }
+            if (yPosition + bubbleHeight > pageInfo.pageHeight - borderMargin) {
+                drawPageNumber(canvas, pageNumber)
+                document.finishPage(page)
+                pageNumber++
+                page = document.startPage(PdfDocument.PageInfo.Builder(595, 842, pageNumber).create())
+                canvas = page.canvas
+                paint.textSize = 8f
+                paint.typeface = Typeface.SERIF
+                paint.style = Paint.Style.FILL
+                drawPageHeader(canvas)
+                yPosition = if (pageNumber == 1) borderMargin + 170f else borderMargin + 100f // Added margin for subsequent pages
+                continue
+            }
 
-        if (isUserMessage) {
-            // User bubble (right side)
-            paint.color = Color.parseColor("#F1F8E9") // Light green
-            val bubbleRect = RectF(
-                borderMargin + contentWidth - bubbleWidth - 20f,
-                yPosition,
-                borderMargin + contentWidth - 20f,
-                yPosition + bubbleHeight
-            )
+            val contentWidthLayout = layout.width.toFloat()
+            val timestampWidth = if (lineIndex == 0) textPaint.measureText(timestamp) else 0f
+            val maxContentWidth = maxOf(contentWidthLayout, timestampWidth)
+            val bubbleWidth = maxContentWidth + 2 * bubblePadding
+            val left = if (isUserMessage) borderMargin + contentWidth - bubbleWidth - 20f else borderMargin + 20f
+            val right = left + bubbleWidth
+            val top = yPosition
+            val bottom = yPosition + bubbleHeight
+            val bubbleRect = RectF(left, top, right, bottom)
+            paint.color = if (isUserMessage) Color.parseColor("#F1F8E9") else Color.parseColor("#E0F7FA")
             canvas.drawRoundRect(bubbleRect, bubbleRadius, bubbleRadius, paint)
-
-            // Tail (left side)
             val tailPath = Path()
-            tailPath.moveTo(bubbleRect.left + bubbleRadius, bubbleRect.bottom - bubbleRadius)
-            tailPath.lineTo(bubbleRect.left - 10f, bubbleRect.bottom)
-            tailPath.lineTo(bubbleRect.left + bubbleRadius, bubbleRect.bottom)
+            if (isUserMessage) {
+                tailPath.moveTo(bubbleRect.left + bubbleRadius, bubbleRect.bottom - bubbleRadius)
+                tailPath.lineTo(bubbleRect.left - 10f, bubbleRect.bottom)
+                tailPath.lineTo(bubbleRect.left + bubbleRadius, bubbleRect.bottom)
+            } else {
+                tailPath.moveTo(bubbleRect.right - bubbleRadius, bubbleRect.bottom - bubbleRadius)
+                tailPath.lineTo(bubbleRect.right + 10f, bubbleRect.bottom)
+                tailPath.lineTo(bubbleRect.right - bubbleRadius, bubbleRect.bottom)
+            }
             tailPath.close()
             canvas.drawPath(tailPath, paint)
-
-            // Timestamp and text
-            paint.color = Color.GRAY
-            canvas.drawText(timestamp, bubbleRect.left + bubblePadding, yPosition + bubblePadding + 12f, paint) // Only 24-hour time
-            paint.color = Color.BLACK
-            lines.forEachIndexed { i, line ->
-                canvas.drawText(line, bubbleRect.left + bubblePadding, yPosition + bubblePadding + 32f + i * 20f, paint)
+            if (lineIndex == 0) {
+                textPaint.color = Color.GRAY
+                canvas.drawText(timestamp, bubbleRect.left + bubblePadding, yPosition + bubblePadding + 12f, textPaint)
+                textPaint.color = Color.BLACK
             }
-        } else {
-            // AI bubble (left side)
-            paint.color = Color.parseColor("#E0F7FA") // Light cyan
-            val bubbleRect = RectF(
-                borderMargin + 20f,
-                yPosition,
-                borderMargin + 20f + bubbleWidth,
-                yPosition + bubbleHeight
-            )
-            canvas.drawRoundRect(bubbleRect, bubbleRadius, bubbleRadius, paint)
-
-            // Tail (right side)
-            val tailPath = Path()
-            tailPath.moveTo(bubbleRect.right - bubbleRadius, bubbleRect.bottom - bubbleRadius)
-            tailPath.lineTo(bubbleRect.right + 10f, bubbleRect.bottom)
-            tailPath.lineTo(bubbleRect.right - bubbleRadius, bubbleRect.bottom)
-            tailPath.close()
-            canvas.drawPath(tailPath, paint)
-
-            // Timestamp and text
-            paint.color = Color.GRAY
-            canvas.drawText(timestamp, bubbleRect.left + bubblePadding, yPosition + bubblePadding + 12f, paint) // Only 24-hour time
-            paint.color = Color.BLACK
-            lines.forEachIndexed { i, line ->
-                canvas.drawText(line, bubbleRect.left + bubblePadding, yPosition + bubblePadding + 32f + i * 20f, paint)
-            }
+            val startY = yPosition + bubblePadding + (if (lineIndex == 0) timestampHeight else 0f)
+            canvas.save()
+            canvas.translate(bubbleRect.left + bubblePadding, startY)
+            layout.draw(canvas)
+            canvas.restore()
+            yPosition += bubbleHeight + 30f
+            lineIndex += linesForBubble.size
         }
-        yPosition += bubbleHeight + 30f
     }
 
-    // Draw page number for the last page
     drawPageNumber(canvas, pageNumber)
-
     document.finishPage(page)
 
-    // Save PDF to Downloads directory
-    val file = File(
-        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-        "Chat_$chatId.pdf"
-    )
+    val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Chat_$chatId.pdf")
     var fos: FileOutputStream? = null
     try {
         fos = FileOutputStream(file)
