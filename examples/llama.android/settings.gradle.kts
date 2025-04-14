@@ -13,6 +13,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LlamaAndroid"
+rootProject.name = "PocketLLM"
 include(":app")
 include(":llama")
