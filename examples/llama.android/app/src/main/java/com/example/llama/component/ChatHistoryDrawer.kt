@@ -1,6 +1,7 @@
 package com.example.llama.component
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -13,6 +14,7 @@ import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.text.Layout
 import android.text.StaticLayout
@@ -25,10 +27,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -59,11 +59,12 @@ fun ChatHistoryDrawer(
     requestPermissions: (Array<String>) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var isDeleting by remember { mutableStateOf(false) }
-    var isDownloading by remember { mutableStateOf(false) }
+    var isActionMode by remember { mutableStateOf(false) }
+    var selectedAction by remember { mutableStateOf<String?>(null) }
     val selectedChats = remember { mutableStateListOf<String>() }
     val context = LocalContext.current
     var showPermissionDialog by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
 
     Log.d("ChatHistoryDrawer", "Rendering drawer with ${histories.size} chat histories")
 
@@ -116,68 +117,69 @@ fun ChatHistoryDrawer(
                 style = MaterialTheme.typography.headlineSmall
             )
             Row {
-                IconButton(onClick = {
-                    Log.d("ChatHistoryDrawer", "New chat button clicked")
-                    onNewChat()
-                }) {
-                    Icon(Icons.Filled.Add, "New Chat")
-                }
-                IconButton(onClick = {
-                    if (isDeleting) {
-                        if (selectedChats.isNotEmpty()) {
-                            Log.d("ChatHistoryDrawer", "Deleting selected chats: $selectedChats")
-                            selectedChats.forEach { chatId -> onDeleteChat(chatId) }
-                            selectedChats.clear()
-                        }
-                        isDeleting = false
-                    } else {
-                        Log.d("ChatHistoryDrawer", "Entering delete mode")
-                        isDeleting = true
-                        isDownloading = false
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Filled.MoreVert, "Menu")
                     }
-                }) {
-                    if (isDeleting) {
-                        Icon(Icons.Filled.Check, "Confirm Delete", tint = MaterialTheme.colorScheme.primary)
-                    } else {
-                        Icon(Icons.Filled.Delete, "Delete Chats", tint = MaterialTheme.colorScheme.error)
-                    }
-                }
-                IconButton(onClick = {
-                    if (isDownloading) {
-                        if (selectedChats.isNotEmpty()) {
-                            Log.d("ChatHistoryDrawer", "Downloading selected chats: $selectedChats")
-                            val hasLegacyPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-                            val hasManagePermission = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R || Environment.isExternalStorageManager()
-                            Log.d("ChatHistoryDrawer", "Legacy permission: $hasLegacyPermission, Manage permission: $hasManagePermission")
-                            if (hasLegacyPermission || hasManagePermission) {
-                                selectedChats.forEach { chatId ->
-                                    val messages = getChatMessages(chatId)
-                                    generateChatPdf(context, chatId, messages)
-                                }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("New Chat") },
+                            onClick = {
+                                Log.d("ChatHistoryDrawer", "New chat selected")
+                                onNewChat()
+                                showMenu = false
+                                isActionMode = false
                                 selectedChats.clear()
-                                isDownloading = false
-                            } else {
-                                Log.d("ChatHistoryDrawer", "Permissions not granted, requesting")
-                                requestPermissions(arrayOf(
-                                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                                    Manifest.permission.READ_EXTERNAL_STORAGE
-                                ))
-                                showPermissionDialog = true
                             }
-                        } else {
-                            Log.d("ChatHistoryDrawer", "No chats selected, exiting download mode")
-                            isDownloading = false
-                        }
-                    } else {
-                        Log.d("ChatHistoryDrawer", "Entering download mode")
-                        isDownloading = true
-                        isDeleting = false
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Download Chats") },
+                            onClick = {
+                                Log.d("ChatHistoryDrawer", "Download chats selected")
+                                selectedAction = "download"
+                                isActionMode = true
+                                showMenu = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Delete Chats") },
+                            onClick = {
+                                Log.d("ChatHistoryDrawer", "Delete chats selected")
+                                selectedAction = "delete"
+                                isActionMode = true
+                                showMenu = false
+                            }
+                        )
                     }
-                }) {
-                    if (isDownloading) {
-                        Icon(Icons.Filled.Check, "Confirm Download", tint = MaterialTheme.colorScheme.primary)
-                    } else {
-                        Icon(Icons.Filled.Download, "Download Chats", tint = MaterialTheme.colorScheme.secondary)
+                }
+                if (isActionMode) {
+                    IconButton(onClick = {
+                        when (selectedAction) {
+                            "delete" -> {
+                                if (selectedChats.isNotEmpty()) {
+                                    Log.d("ChatHistoryDrawer", "Deleting selected chats: $selectedChats")
+                                    selectedChats.forEach { chatId -> onDeleteChat(chatId) }
+                                    selectedChats.clear()
+                                }
+                            }
+                            "download" -> {
+                                if (selectedChats.isNotEmpty()) {
+                                    Log.d("ChatHistoryDrawer", "Downloading selected chats: $selectedChats")
+                                    selectedChats.forEach { chatId ->
+                                        val messages = getChatMessages(chatId)
+                                        generateChatPdf(context, chatId, messages)
+                                    }
+                                    selectedChats.clear()
+                                }
+                            }
+                        }
+                        isActionMode = false
+                        selectedAction = null
+                    }) {
+                        Icon(Icons.Filled.Check, "Confirm Action", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             }
@@ -212,7 +214,7 @@ fun ChatHistoryDrawer(
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (isDeleting || isDownloading) {
+                            if (isActionMode) {
                                 Checkbox(
                                     checked = selectedChats.contains(history.id),
                                     onCheckedChange = { isChecked ->
@@ -230,8 +232,8 @@ fun ChatHistoryDrawer(
                             Column(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .clickable(enabled = !isDeleting && !isDownloading) {
-                                        if (!isDeleting && !isDownloading) {
+                                    .clickable(enabled = !isActionMode) {
+                                        if (!isActionMode) {
                                             Log.d("ChatHistoryDrawer", "Selected chat: ${history.id}")
                                             onHistorySelected(history.id)
                                         }
@@ -253,13 +255,6 @@ fun ChatHistoryDrawer(
 }
 
 fun generateChatPdf(context: android.content.Context, chatId: String, messages: List<String>) {
-    val hasLegacyPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-    val hasManagePermission = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R || Environment.isExternalStorageManager()
-    if (!hasLegacyPermission && !hasManagePermission) {
-        Log.e("ChatHistoryDrawer", "Storage permission not granted in generateChatPdf")
-        return
-    }
-
     val document = PdfDocument()
     var pageNumber = 1
     val pageInfo = PdfDocument.PageInfo.Builder(595, 842, pageNumber).create()
@@ -446,17 +441,38 @@ fun generateChatPdf(context: android.content.Context, chatId: String, messages: 
     drawPageNumber(canvas, pageNumber)
     document.finishPage(page)
 
-    val file = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Chat_$chatId.pdf")
-    var fos: FileOutputStream? = null
-    try {
-        fos = FileOutputStream(file)
-        document.writeTo(fos)
-        fos.flush()
-        Log.d("ChatHistoryDrawer", "PDF saved: ${file.absolutePath}")
-    } catch (e: Exception) {
-        Log.e("ChatHistoryDrawer", "Error saving PDF: ${e.message}")
-    } finally {
-        fos?.close()
+    // Save to Downloads using MediaStore
+    val fileName = "Chat_$chatId.pdf"
+    val contentValues = ContentValues().apply {
+        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+        put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        put(MediaStore.Downloads.IS_PENDING, 1)
+    }
+
+    val resolver = context.contentResolver
+    val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+    val fileUri = resolver.insert(collection, contentValues)
+
+    fileUri?.let { uri ->
+        try {
+            resolver.openOutputStream(uri)?.use { outputStream ->
+                document.writeTo(outputStream)
+                outputStream.flush()
+                Log.d("ChatHistoryDrawer", "PDF saved to Downloads: $fileName")
+            }
+
+            // Mark the file as ready
+            contentValues.clear()
+            contentValues.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
+        } catch (e: Exception) {
+            Log.e("ChatHistoryDrawer", "Error saving PDF: ${e.message}")
+        } finally {
+            document.close()
+        }
+    } ?: run {
+        Log.e("ChatHistoryDrawer", "Failed to create file URI")
         document.close()
     }
 }
